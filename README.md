@@ -131,6 +131,7 @@ Each agent:
 | `SNIPPET_SOURCES` | empty | Comma-separated URLs to fetch snippets |
 | `HEALTH_CHECK_INTERVAL` | `5` | Seconds between health checks |
 | `RESYNC_INTERVAL` | `300` | Seconds between full resyncs |
+| `CONFIG_PUSH_ENABLED` | `true` | Set to `false` for snippet-only mode |
 
 ### Docker Labels
 
@@ -178,6 +179,15 @@ labels:
 ```
 
 **Remote agents fetch automatically** when `SNIPPET_SOURCES` is configured.
+
+**Snippet-only mode:** To run an agent that only serves snippets without pushing any routes to Caddy, set `CONFIG_PUSH_ENABLED=false`:
+
+```yaml
+caddy-agent:
+  environment:
+    - SNIPPET_API_PORT=8567
+    - CONFIG_PUSH_ENABLED=false  # Disable route pushing, only serve snippets
+```
 
 ## Route Recovery
 
@@ -263,6 +273,7 @@ services:
       - CADDY_URL=http://localhost:2019
       - AGENT_ID=host1-server
       - SNIPPET_API_PORT=8567
+      - CONFIG_PUSH_ENABLED=false  # Snippet-only mode
 
 volumes:
   caddy_data:

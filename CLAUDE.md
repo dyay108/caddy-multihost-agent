@@ -107,14 +107,16 @@ Share snippet definitions between hosts via HTTP API.
 | `SNIPPET_API_PORT` | `0` | Port to serve snippets API. `0` = disabled. |
 | `SNIPPET_SOURCES` | `` | Comma-separated URLs to fetch snippets from |
 | `SNIPPET_CACHE_TTL` | `300` | Cache duration in seconds (5 min default) |
+| `CONFIG_PUSH_ENABLED` | `true` | Set to `false` for snippet-only mode (no route pushing) |
 
 **Usage:**
 
-Host1 (serves snippets):
+Host1 (serves snippets only, no route pushing):
 ```yaml
 caddy-agent:
   environment:
     - SNIPPET_API_PORT=8567
+    - CONFIG_PUSH_ENABLED=false
 ```
 
 Host2/Host3 (fetches snippets):
