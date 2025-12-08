@@ -129,9 +129,11 @@ Each agent:
 | `HOST_IP` | auto-detected | IP for upstream addresses |
 | `SNIPPET_API_PORT` | `0` (disabled) | Port to serve snippet API |
 | `SNIPPET_SOURCES` | empty | Comma-separated URLs to fetch snippets |
+| `SNIPPET_CACHE_TTL` | `300` | Snippet cache duration in seconds |
 | `HEALTH_CHECK_INTERVAL` | `5` | Seconds between health checks |
 | `RESYNC_INTERVAL` | `300` | Seconds between full resyncs |
 | `CONFIG_PUSH_ENABLED` | `true` | Set to `false` for snippet-only mode |
+| `LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
 ### Docker Labels
 
@@ -207,6 +209,16 @@ labels:
 ```
 
 **Remote agents fetch automatically** when `SNIPPET_SOURCES` is configured.
+
+**Snippet compatibility with reverse_proxy:**
+
+| Snippet | Safe to import? | Reason |
+|---------|-----------------|--------|
+| `internal` | Yes | Only sets TLS cert type |
+| `https` | Yes | Forces TLS to backend (for self-signed certs) |
+| `wildcard` | No | Contains `handle.abort` - terminates request |
+
+**Note:** Wildcard domains (e.g., `*.example.com`) should import `wildcard` to set up TLS certs. Individual services should NOT import `wildcard` - just declare their domain and the cert is used automatically.
 
 **Snippet-only mode:** To run an agent that only serves snippets without pushing any routes to Caddy, set `CONFIG_PUSH_ENABLED=false`:
 
