@@ -41,7 +41,7 @@ _effective_host_ip = None
 _snippet_cache = {}
 _snippet_cache_time = 0
 
-_docker_base_url = DOCKER_PROXY_URL.strip() or os.getenv("DOCKER_HOST", "unix://var/run/docker.sock")
+_docker_base_url = DOCKER_PROXY_URL.strip() or os.getenv("DOCKER_HOST", "unix:///var/run/docker.sock")
 client = docker.DockerClient(base_url=_docker_base_url)
 
 # Configure logging with LOG_LEVEL env var
