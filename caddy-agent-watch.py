@@ -385,6 +385,7 @@ def fetch_remote_snippets():
 def parse_imports(config):
     """Parse snippet imports from config.
     Supports: import, import_N with optional args (Caddyfile-style).
+    Also supports ordered labels: N_import or N_import_M
     Also supports multiple comma-separated snippets per import value.
     Example: "proxy_config http://host:70" -> name=proxy_config, args=["http://host:70"]
     Example: "snippet_a, snippet_b arg1" -> two imports
@@ -396,6 +397,9 @@ def parse_imports(config):
     for key, value in config.items():
         if key == 'import' or key.startswith('import_'):
             imports.append((key, value))
+            continue
+        if re.match(r"^\d+_import(?:_\d+)?$", key):
+            imports.append((key, value))
 
     if not imports:
         logger.debug("No snippet imports found in route config")
@@ -404,17 +408,30 @@ def parse_imports(config):
     def sort_key(item):
         key = item[0]
         if key == 'import':
-            return (-1, 0)
+            return (-1, 0, 0)
         match = re.match(r"import_(\d+)", key)
         if match:
-            return (0, int(match.group(1)))
+            return (0, 0, int(match.group(1)))
+        match = re.match(r"^(\d+)_import(?:_(\d+))?$", key)
+        if match:
+            primary = int(match.group(1))
+            secondary = int(match.group(2) or 0)
+            return (0, primary, secondary)
         return (1, key)
 
     imports.sort(key=sort_key)
     logger.debug(f"Found {len(imports)} import directive(s): {[k for k, _ in imports]}")
 
     parsed = []
-    for _, value in imports:
+    for key, value in imports:
+        order = None
+        match = re.match(r"import_(\d+)", key)
+        if match:
+            order = int(match.group(1))
+        else:
+            match = re.match(r"^(\d+)_import(?:_(\d+))?$", key)
+            if match:
+                order = int(match.group(1))
         # Allow multiple comma-separated snippet specs per import value
         for segment in value.split(','):
             segment = segment.strip()
@@ -428,7 +445,7 @@ def parse_imports(config):
                 continue
             snippet_name = parts[0]
             args = parts[1:]
-            parsed.append((snippet_name, args))
+            parsed.append((snippet_name, args, order))
 
     logger.debug(f"Parsed imports: {len(parsed)}")
     return parsed
@@ -449,12 +466,33 @@ def substitute_import_args(value, args):
 
 def apply_snippet_imports(config, snippets, route_num):
     """Apply snippet imports with args and merge into route config."""
+    import re
+
     imports = parse_imports(config)
     if not imports:
         return config
 
+    def prefix_handle_keys(snippet_config, order):
+        if order is None:
+            return snippet_config
+
+        prefixed = {}
+        for key, value in snippet_config.items():
+            parts = key.split('.', 1)
+            base = parts[0]
+            rest = parts[1] if len(parts) > 1 else ''
+
+            if base == 'handle' or base.startswith('handle_'):
+                new_base = f"{order}_handle{base[len('handle'):] }"
+                new_key = f"{new_base}.{rest}" if rest else new_base
+                prefixed[new_key] = value
+            else:
+                prefixed[key] = value
+
+        return prefixed
+
     merged_config = {}
-    for snippet_name, args in imports:
+    for snippet_name, args, order in imports:
         if snippet_name in snippets:
             logger.info(f"Applying snippet '{snippet_name}' to route {route_num} (args redacted)")
             snippet_config = snippets[snippet_name]
@@ -462,6 +500,7 @@ def apply_snippet_imports(config, snippets, route_num):
                 k: substitute_import_args(v, args)
                 for k, v in snippet_config.items()
             }
+            substituted = prefix_handle_keys(substituted, order)
             merged_config = {**merged_config, **substituted}
         else:
             logger.warning(f"Snippet '{snippet_name}' not found for route {route_num}")
@@ -471,7 +510,7 @@ def apply_snippet_imports(config, snippets, route_num):
 
     # Remove import keys from final config
     for key in list(config.keys()):
-        if key == 'import' or key.startswith('import_'):
+        if key == 'import' or key.startswith('import_') or re.match(r"^\d+_import", key):
             config.pop(key, None)
 
     logger.info(f"Merged config keys after import: {list(config.keys())}")
@@ -516,15 +555,24 @@ def parse_named_matchers(config):
     return matchers
 
 def parse_handle_blocks(config):
-    """Parse handle_N blocks and their directives."""
+    """Parse handle blocks and their directives.
+    Supports: handle, handle_N, and ordered labels like 20_handle.
+    """
+    import re
+
     handle_blocks = {}
 
     for key, value in config.items():
-        if not key.startswith('handle_'):
-            continue
         parts = key.split('.', 1)
         handle_key = parts[0]
         directive = parts[1] if len(parts) > 1 else ''
+
+        if not (
+            handle_key == 'handle'
+            or handle_key.startswith('handle_')
+            or re.match(r'^\d+_handle(?:_\d+)?$', handle_key)
+        ):
+            continue
 
         if handle_key not in handle_blocks:
             handle_blocks[handle_key] = {
@@ -533,7 +581,7 @@ def parse_handle_blocks(config):
             }
 
         if not directive:
-            if isinstance(value, str) and value.strip().startswith('@'):
+            if isinstance(value, str) and value.strip():
                 handle_blocks[handle_key]['matcher'] = value.strip()
         else:
             handle_blocks[handle_key]['directives'][directive] = value
@@ -829,10 +877,19 @@ def parse_container_labels(container, labels, host_ip, snippets=None):
                 )
 
                 def handle_sort_key(key):
-                    try:
-                        return (0, int(key.split('_', 1)[1]))
-                    except (IndexError, ValueError):
-                        return (1, key)
+                    if key == 'handle':
+                        return (1, -1, -1)
+                    match = re.match(r'^(\d+)_handle(?:_(\d+))?$', key)
+                    if match:
+                        primary = int(match.group(1))
+                        secondary = int(match.group(2)) if match.group(2) is not None else -1
+                        return (0, primary, secondary)
+                    if key.startswith('handle_'):
+                        try:
+                            return (1, int(key.split('_', 1)[1]), -1)
+                        except (IndexError, ValueError):
+                            return (2, key, -1)
+                    return (2, key, -1)
 
                 for handle_key in sorted(handle_blocks.keys(), key=handle_sort_key):
                     block = handle_blocks[handle_key]
@@ -883,12 +940,15 @@ def parse_container_labels(container, labels, host_ip, snippets=None):
 
                     match = {"host": domains}
                     matcher_name = block.get('matcher')
-                    if matcher_name and matcher_name in named_matchers:
-                        matcher_def = named_matchers[matcher_name]
-                        match.update(matcher_def)
-                        logger.debug(f"{handle_key}: applied matcher {matcher_name} -> {matcher_def}")
-                    elif matcher_name:
-                        logger.warning(f"Matcher '{matcher_name}' not found for route {route_num}")
+                    if matcher_name:
+                        if matcher_name.startswith('@') and matcher_name in named_matchers:
+                            matcher_def = named_matchers[matcher_name]
+                            match.update(matcher_def)
+                            logger.debug(f"{handle_key}: applied matcher {matcher_name} -> {matcher_def}")
+                        elif matcher_name.startswith('@'):
+                            logger.warning(f"Matcher '{matcher_name}' not found for route {route_num}")
+                        else:
+                            match['path'] = [matcher_name]
 
                     route_id = f"{base_route_id}{suffix}_{handle_key}"
                     route = {
